@@ -23,14 +23,9 @@ jobs:
               "api_id": "33128122",
               "api_hash": "319461e0059569e85c41a2fc46507f86",
               "team_id": "R72FY6PWXS",
-              "app_center_id": "0",
               "is_internal_build": "true",
               "is_appstore_build": "false",
-              "appstore_id": "0",
-              "app_specific_url_scheme": "tg",
-              "premium_iap_product_id": "",
-              "enable_siri": false,
-              "enable_icloud": false
+              "app_specific_url_scheme": "tg"
           }
           EOF
 
@@ -40,75 +35,39 @@ jobs:
           curl -L -o build-input/bazel-8.4.2-darwin-arm64 \
             https://github.com/bazelbuild/bazel/releases/download/8.4.2/bazel-8.4.2-darwin-arm64
           chmod +x build-input/bazel-8.4.2-darwin-arm64
+          ./build-input/bazel-8.4.2-darwin-arm64 --version
 
-      - name: Build with Bazel (Device)
+      - name: Build with Make.py
         run: |
           SOURCE_DIR=$GITHUB_WORKSPACE
-          BAZEL_USER_ROOT="/private/var/tmp/_bazel_containerhost"
+          BAZEL_USER_ROOT="/private/var/tmp/_bazel_github"
           cd $SOURCE_DIR
 
-          # 获取构建号
           BUILD_NUMBER_OFFSET="$(cat build_number_offset)"
           APP_VERSION=$(cat versions.json | python3 -c 'import json,sys;obj=json.load(sys.stdin);print(obj["app"]);')
           COMMIT_COUNT=$(git rev-list --count HEAD)
           BUILD_NUMBER="$(($COMMIT_COUNT+$BUILD_NUMBER_OFFSET))"
-          echo "BUILD_NUMBER=$BUILD_NUMBER" >> $GITHUB_ENV
-          echo "APP_VERSION=$APP_VERSION" >> $GITHUB_ENV
 
-          # Bazel 直接构建真机版本（release_arm64）
-          ./build-input/bazel-8.4.2-darwin-arm64 \
-            --output_user_root="$BAZEL_USER_ROOT" \
+          python3 build-system/Make/Make.py \
+            --bazelUserRoot="$BAZEL_USER_ROOT" \
+            --bazel=./build-input/bazel-8.4.2-darwin-arm64 \
             build \
-            --//Telegram:disableProvisioningProfiles \
-            -c opt \
-            --ios_multi_cpus=arm64 \
-            --define=buildNumber="$BUILD_NUMBER" \
-            --define=telegramVersion="$APP_VERSION" \
-            --features=dead_strip \
-            --objc_enable_binary_stripping \
-            --apple_generate_dsym \
-            --output_groups=+dsyms \
-            //Telegram:Telegram
+            --configurationPath="build-config.json" \
+            --configuration=release_arm64 \
+            --buildNumber="$BUILD_NUMBER" \
+            --disableProvisioningProfiles
 
-      - name: Create IPA from Bazel output
+      - name: Collect IPA
         run: |
           cd $GITHUB_WORKSPACE
-          
-          # 查找 Bazel 生成的 app bundle
-          APP_PATH=$(find bazel-bin/Telegram -name "Telegram.app" -type d 2>/dev/null | head -1)
-          
-          if [ -n "$APP_PATH" ]; then
-            echo "Found app at: $APP_PATH"
-            
-            # 创建 Payload 目录并复制 app
-            mkdir -p dist/Payload
-            cp -R "$APP_PATH" dist/Payload/
-            
-            # 打包成 IPA（未签名）
-            cd dist
-            zip -r GhostGram.ipa Payload
-            cd ..
-            
-            # 同时复制 DSYM（如果有）
-            DSYM_PATH=$(find bazel-bin/Telegram -name "Telegram.dSYM" -type d 2>/dev/null | head -1)
-            if [ -n "$DSYM_PATH" ]; then
-              cp -R "$DSYM_PATH" dist/
-            fi
-            
-            rm -rf dist/Payload
-            ls -lh dist/
-          else
-            echo "App not found in bazel-bin/Telegram"
-            find bazel-bin -name "*.app" -type d 2>/dev/null || true
-            find bazel-bin -name "Telegram*" -type f 2>/dev/null | head -20 || true
-          fi
+          mkdir -p dist
+          find bazel-out -name "Telegram.ipa" -type f -exec cp {} dist/GhostGram.ipa \; 2>/dev/null || true
+          ls -lh dist/
 
       - name: Upload Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: GhostGram-Build-${{ github.run_number }}
-          path: |
-            dist/*.ipa
-            dist/*.dSYM
+          path: dist/*.ipa
           retention-days: 7
