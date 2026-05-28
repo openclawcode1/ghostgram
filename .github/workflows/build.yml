@@ -15,32 +15,21 @@ jobs:
           submodules: 'recursive'
           fetch-depth: '0'
 
-      - name: Create build configuration
+      - name: Set active Xcode path
         run: |
-          cat > build-config.json << 'EOF'
-          {
-              "bundle_id": "com.lighting5048.pink1317",
-              "api_id": "33128122",
-              "api_hash": "319461e0059569e85c41a2fc46507f86",
-              "team_id": "R72FY6PWXS",
-              "is_internal_build": "true",
-              "is_appstore_build": "false",
-              "app_specific_url_scheme": "tg"
-          }
-          EOF
+          XCODE_VERSION=$(cat versions.json | python3 -c 'import json,sys;obj=json.load(sys.stdin);print(obj["xcode"]);')
+          sudo xcode-select -s /Applications/Xcode_$XCODE_VERSION.app/Contents/Developer || true
 
-      - name: Setup Bazel
+      - name: Create canonical source directory
         run: |
-          mkdir -p build-input
-          curl -L -o build-input/bazel-8.4.2-darwin-arm64 \
-            https://github.com/bazelbuild/bazel/releases/download/8.4.2/bazel-8.4.2-darwin-arm64
-          chmod +x build-input/bazel-8.4.2-darwin-arm64
-          ./build-input/bazel-8.4.2-darwin-arm64 --version
+          sudo mkdir -p /Users/Shared
+          cp -R $GITHUB_WORKSPACE /Users/Shared/
+          mv /Users/Shared/$(basename $GITHUB_WORKSPACE) /Users/Shared/telegram-ios
 
       - name: Build with Make.py
         run: |
-          SOURCE_DIR=$GITHUB_WORKSPACE
-          BAZEL_USER_ROOT="/private/var/tmp/_bazel_github"
+          SOURCE_DIR=/Users/Shared/telegram-ios
+          BAZEL_USER_ROOT="/private/var/tmp/_bazel_containerhost"
           cd $SOURCE_DIR
 
           BUILD_NUMBER_OFFSET="$(cat build_number_offset)"
@@ -50,18 +39,18 @@ jobs:
 
           python3 build-system/Make/Make.py \
             --bazelUserRoot="$BAZEL_USER_ROOT" \
-            --bazel=./build-input/bazel-8.4.2-darwin-arm64 \
             build \
-            --configurationPath="build-config.json" \
+            --configurationPath="build-system/appstore-configuration.json" \
+            --codesigningInformationPath=build-system/fake-codesigning \
             --configuration=release_arm64 \
-            --buildNumber="$BUILD_NUMBER" \
-            --disableProvisioningProfiles
+            --buildNumber="$BUILD_NUMBER"
 
       - name: Collect IPA
         run: |
-          cd $GITHUB_WORKSPACE
           mkdir -p dist
-          find bazel-out -name "Telegram.ipa" -type f -exec cp {} dist/GhostGram.ipa \; 2>/dev/null || true
+          for f in bazel-out/applebin_ios-ios_arm*-opt-ST-*/bin/Telegram/Telegram.ipa; do
+            cp "$f" dist/GhostGram.ipa 2>/dev/null && break
+          done
           ls -lh dist/
 
       - name: Upload Artifacts
